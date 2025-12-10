@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run test (10 second sleep)
+        run: |
+          echo "Starting CI test at $(date)"
+          echo "Sleeping for 10 seconds to simulate CI..."
+          sleep 10
+          echo "CI test completed at $(date)"
+          echo "✅ All tests passed!"
