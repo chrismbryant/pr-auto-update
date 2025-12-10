@@ -1,116 +1,212 @@
-# PR Auto-Update Test Repository
+# PR Auto-Update Mechanism
 
-This repository tests an automated mechanism for updating PR branches when auto-merge is enabled and the base branch moves forward.
+Automatically updates PR branches when auto-merge is enabled and the base branch moves forward, eliminating manual "Update branch" clicking.
 
-## Problem Statement
+## Problem
 
-When using GitHub's auto-merge feature with required linear history and branch protection rules, PRs can get stuck in a queue. Each time a PR merges, all other PRs become "out of date" and require manual clicking of the "Update branch" button before they can merge.
-
-For chains of PRs, this creates a manual babysitting process where you must monitor each PR and click "Update" repeatedly.
+When using GitHub's auto-merge with required linear history, PRs become "out of date" each time another PR merges. You must manually click "Update branch" repeatedly to keep the merge queue moving.
 
 ## Solution
 
-This repo implements a GitHub Action that automatically updates PR branches when:
-- The base branch (main) is updated
-- The PR has auto-merge enabled
-- The PR is behind the base branch
-- The PR has no merge conflicts
+A GitHub Action that automatically:
+1. Detects PRs with auto-merge enabled
+2. Updates them when the base branch changes
+3. Triggers CI on the updated branches
+4. Allows auto-merge to complete the process
 
-## How It Works
+## Architecture
 
-1. When a PR merges to main, the `auto-update-prs.yml` workflow triggers
-2. The workflow lists all open PRs targeting main
-3. For each PR with auto-merge enabled:
-   - Checks if the branch is behind main
-   - Merges main into the PR branch (creating a merge commit in the feature branch)
-   - Pushes the updated branch
-4. The PR's CI runs again on the updated branch
-5. Once CI passes, GitHub's auto-merge kicks in and merges the PR
-6. This triggers the workflow again for remaining PRs
+### Components
 
-## Repository Configuration
+**GitHub App (Organization-level)**
+- Created once in your organization settings
+- Owns the authentication credentials
+- Provides tokens that can trigger workflows
+- Not tied to any individual user account
 
-- Branch protection on main:
-  - Require status checks to pass (CI workflow)
+**Workflow File (Repository-level)**
+- Added to `.github/workflows/auto-update-prs.yml` in **each repository** where you want auto-updates
+- Uses credentials from the GitHub App
+- Runs when the base branch receives new commits
+- Updates PR branches that have auto-merge enabled
+
+### Relationship
+
+```
+GitHub Organization
+└── GitHub App (PR Auto-Update Bot)
+    ├── Installed on → Repository A
+    │   └── .github/workflows/auto-update-prs.yml (uses app credentials)
+    ├── Installed on → Repository B
+    │   └── .github/workflows/auto-update-prs.yml (uses app credentials)
+    └── Installed on → Repository C
+        └── .github/workflows/auto-update-prs.yml (uses app credentials)
+```
+
+The **GitHub App lives at the organization level** and provides authentication. The **workflow file lives in each repository** and uses the app's credentials.
+
+## Setup
+
+### Step 1: Create GitHub App (Organization Admin - Once)
+
+See [GITHUB_APP_SETUP.md](./GITHUB_APP_SETUP.md) for detailed instructions.
+
+Quick summary:
+1. Create app in organization settings
+2. Set permissions: `contents: write`, `pull-requests: read`
+3. Generate private key
+4. Install app on desired repositories
+
+### Step 2: Add Workflow to Each Repository (Per Repository)
+
+#### 2.1 Add Credentials
+
+In **each repository** where you want auto-updates:
+
+1. Go to Settings → Secrets and variables → Actions
+2. Add **variable**: `APP_ID` = your app ID
+3. Add **secret**: `APP_PRIVATE_KEY` = contents of .pem file
+
+#### 2.2 Add Workflow File
+
+Create `.github/workflows/auto-update-prs.yml`:
+
+```yaml
+name: Auto-update PRs with auto-merge enabled
+
+on:
+  push:
+    branches:
+      - main  # Change this to match your base branch
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  update-prs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Update PRs with auto-merge enabled
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          # See full script in .github/workflows/auto-update-prs.yml
+```
+
+See [`.github/workflows/auto-update-prs.yml`](./.github/workflows/auto-update-prs.yml) for the complete workflow.
+
+## Configuration
+
+### Specifying Base Branches
+
+Edit the `on.push.branches` section to match your workflow:
+
+**Single base branch:**
+```yaml
+on:
+  push:
+    branches:
+      - main
+```
+
+**Multiple base branches:**
+```yaml
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - staging
+```
+
+**Pattern matching:**
+```yaml
+on:
+  push:
+    branches:
+      - main
+      - 'release/**'
+```
+
+The workflow will check for PRs targeting whichever branch received the push. To specify a specific target branch, modify line 53 in the workflow:
+```bash
+pr_numbers=$(gh pr list --base main --state open --json number --jq '.[].number')
+```
+
+Change `--base main` to `--base develop` or the appropriate branch name.
+
+## Usage
+
+### Enable Auto-merge on PRs
+
+For PRs you want to auto-update and auto-merge:
+
+```bash
+gh pr merge PR_NUMBER --auto --squash
+```
+
+Or via GitHub UI: Click "Enable auto-merge" on the PR page.
+
+### The Cascade
+
+1. PR with auto-merge enabled passes CI
+2. GitHub auto-merges the PR
+3. Workflow detects the base branch update
+4. Workflow updates remaining PRs with auto-merge enabled
+5. CI runs on updated PRs
+6. Process repeats until all PRs merge
+
+## Testing
+
+This repository contains validation evidence:
+- [EVIDENCE.md](./EVIDENCE.md) - Complete test results
+- Validated with 13 PRs across multiple test scenarios
+- Average merge time: ~31 seconds per PR
+
+## Requirements
+
+- GitHub Actions enabled
+- Branch protection with:
+  - Required status checks
   - Require branches to be up to date before merging
-  - Require linear history
-  - Only allow squash merging
-- CI workflow: 10-second sleep to simulate real CI
-- Auto-update workflow: Runs on every push to main
+  - Required linear history (optional, but recommended)
+- GitHub App with proper permissions
+- Repository secrets configured
 
-## Test Scenario
+## Troubleshooting
 
-This repo contains test PRs to validate the mechanism:
-- `pr1-auto` through `pr5-auto`: Five PRs with auto-merge enabled
-- `pr6-no-automerge`: PR without auto-merge (should not be updated)
-- `pr7-conflict`: PR with conflicts (should be skipped)
+See [GITHUB_APP_SETUP.md](./GITHUB_APP_SETUP.md) for:
+- Common issues and solutions
+- Security best practices
+- Maintenance procedures
 
-Expected behavior:
-1. Manually merge pr1-auto
-2. The workflow auto-updates pr2-auto through pr5-auto sequentially
-3. Each PR merges after ~10 seconds (CI time)
-4. Total cascade time: ~50-60 seconds
-5. pr6 and pr7 are not updated
+## Why GitHub App Instead of PAT?
 
-## Evidence
+| Feature | GitHub App | Personal Access Token |
+|---------|------------|----------------------|
+| Organization-owned | ✅ Yes | ❌ No (tied to user) |
+| Survives employee turnover | ✅ Yes | ❌ No |
+| Fine-grained permissions | ✅ Yes | ⚠️ Limited |
+| Token expiration | ✅ 1 hour | ❌ Manual rotation |
+| Audit trail | ✅ Clear | ⚠️ Shows as user |
 
-See [EVIDENCE.md](./EVIDENCE.md) for documented results of the test run.
-
-## Validation
-
-Run `scripts/validate_test.sh` to programmatically verify the expected behavior.
-
-## Deployment to Production
-
-Once validated here, this workflow can be adapted for use in production repositories like atlas-core.
-
-### Important: GitHub App Required for Production
-
-For production use in **organization repositories**, you must use a **GitHub App** instead of `GITHUB_TOKEN`. This is because GitHub does not trigger PR workflows when `github-actions[bot]` pushes to branches (security feature to prevent infinite loops).
-
-**Why GitHub App (not PAT)?**
-- ✅ Owned by the organization, not a single user
-- ✅ Continues working even if users leave
-- ✅ Fine-grained permissions (more secure)
-- ✅ Tokens auto-expire after 1 hour
-- ✅ Better audit trail
-
-**Setup Steps for Organization Repos:**
-
-1. **Create a GitHub App**:
-   - Go to Organization Settings → Developer settings → GitHub Apps → New GitHub App
-   - Name: `PR Auto-Update Bot` (or similar)
-   - Homepage URL: Your organization's URL
-   - Webhook: Uncheck "Active" (not needed)
-   - Permissions:
-     - Repository permissions → Contents: Read and write
-     - Repository permissions → Pull requests: Read-only
-   - Click "Create GitHub App"
-
-2. **Generate and store credentials**:
-   - In the app settings, click "Generate a private key" and download the file
-   - Note the App ID (shown at the top)
-   - Go to your repository Settings → Secrets and variables → Actions
-   - Add variable `APP_ID` with your app ID
-   - Add secret `APP_PRIVATE_KEY` with the contents of the downloaded .pem file
-
-3. **Install the app**:
-   - In the app settings, click "Install App"
-   - Choose your organization
-   - Select "All repositories" or specific repos
-
-4. **Update the workflow**:
-   Add this before your existing steps:
-   ```yaml
-   - uses: actions/create-github-app-token@v1
-     id: app-token
-     with:
-       app-id: ${{ vars.APP_ID }}
-       private-key: ${{ secrets.APP_PRIVATE_KEY }}
-   ```
-   Then change `GH_TOKEN: ${{ github.token }}` to `GH_TOKEN: ${{ steps.app-token.outputs.token }}`
-
-**For Personal Repos (Alternative):**
-You can use a Personal Access Token (PAT) instead. Generate a PAT with `repo` scope, add it as `AUTO_UPDATE_TOKEN` secret, and use it in the workflow.
-
-Without this change, the mechanism will update PR branches but won't trigger CI, preventing auto-merge from completing.
+For organization repositories, GitHub Apps are the recommended approach.

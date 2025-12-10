@@ -1,0 +1,99 @@
+name: Auto-update PRs with auto-merge enabled
+
+on:
+  push:
+    branches:
+      - main
+      # Add additional branches if needed (e.g., develop, staging)
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  update-prs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Update PRs with auto-merge enabled
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          echo "Checking for PRs with auto-merge enabled..."
+
+          # Get all open PRs targeting the base branch
+          pr_numbers=$(gh pr list --base main --state open --json number --jq '.[].number')
+
+          if [ -z "$pr_numbers" ]; then
+            echo "No open PRs found."
+            exit 0
+          fi
+
+          echo "Found PRs: $pr_numbers"
+
+          # Process each PR
+          for pr_number in $pr_numbers; do
+            echo "Evaluating PR #$pr_number..."
+
+            # Get PR details
+            pr_data=$(gh pr view $pr_number --json headRefName,autoMergeRequest,mergeable)
+            pr_branch=$(echo "$pr_data" | jq -r '.headRefName')
+            auto_merge_enabled=$(echo "$pr_data" | jq -r '.autoMergeRequest != null')
+            mergeable=$(echo "$pr_data" | jq -r '.mergeable')
+
+            # Skip if auto-merge is not enabled
+            if [ "$auto_merge_enabled" != "true" ]; then
+              echo "Skipping PR #$pr_number (auto-merge not enabled)"
+              continue
+            fi
+
+            # Skip if there are conflicts
+            if [ "$mergeable" = "CONFLICTING" ]; then
+              echo "Skipping PR #$pr_number (merge conflicts detected)"
+              continue
+            fi
+
+            # Check if branch is behind main
+            git fetch origin $pr_branch
+            git fetch origin main
+            git checkout $pr_branch
+            behind_count=$(git rev-list --count HEAD..origin/main)
+
+            if [ "$behind_count" -eq 0 ]; then
+              echo "PR #$pr_number is already up-to-date"
+              continue
+            fi
+
+            echo "PR #$pr_number is $behind_count commit(s) behind, updating..."
+
+            # Merge main into the PR branch
+            if git merge origin/main -m "Auto-update: merge main into $pr_branch"; then
+              if git push origin $pr_branch; then
+                echo "Successfully updated PR #$pr_number"
+              else
+                echo "Failed to push updated branch for PR #$pr_number"
+              fi
+            else
+              echo "Failed to merge main into PR #$pr_number (conflicts)"
+              git merge --abort
+            fi
+          done
+
+          echo "Auto-update workflow completed"
