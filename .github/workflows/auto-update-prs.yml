@@ -5,6 +5,7 @@ on:
     branches:
       - main
       # Add additional branches if needed (e.g., develop, staging)
+      # The workflow automatically adapts to whichever branch triggered it
 
 permissions:
   contents: write
@@ -35,14 +36,15 @@ jobs:
       - name: Update PRs with auto-merge enabled
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BASE_BRANCH: ${{ github.ref_name }}
         run: |
-          echo "Checking for PRs with auto-merge enabled..."
+          echo "Checking for PRs targeting ${BASE_BRANCH} with auto-merge enabled..."
 
           # Get all open PRs targeting the base branch
-          pr_numbers=$(gh pr list --base main --state open --json number --jq '.[].number')
+          pr_numbers=$(gh pr list --base ${BASE_BRANCH} --state open --json number --jq '.[].number')
 
           if [ -z "$pr_numbers" ]; then
-            echo "No open PRs found."
+            echo "No open PRs found targeting ${BASE_BRANCH}."
             exit 0
           fi
 
@@ -70,11 +72,11 @@ jobs:
               continue
             fi
 
-            # Check if branch is behind main
+            # Check if branch is behind the base branch
             git fetch origin $pr_branch
-            git fetch origin main
+            git fetch origin ${BASE_BRANCH}
             git checkout $pr_branch
-            behind_count=$(git rev-list --count HEAD..origin/main)
+            behind_count=$(git rev-list --count HEAD..origin/${BASE_BRANCH})
 
             if [ "$behind_count" -eq 0 ]; then
               echo "PR #$pr_number is already up-to-date"
@@ -83,15 +85,15 @@ jobs:
 
             echo "PR #$pr_number is $behind_count commit(s) behind, updating..."
 
-            # Merge main into the PR branch
-            if git merge origin/main -m "Auto-update: merge main into $pr_branch"; then
+            # Merge base branch into the PR branch
+            if git merge origin/${BASE_BRANCH} -m "Auto-update: merge ${BASE_BRANCH} into $pr_branch"; then
               if git push origin $pr_branch; then
                 echo "Successfully updated PR #$pr_number"
               else
                 echo "Failed to push updated branch for PR #$pr_number"
               fi
             else
-              echo "Failed to merge main into PR #$pr_number (conflicts)"
+              echo "Failed to merge ${BASE_BRANCH} into PR #$pr_number (conflicts)"
               git merge --abort
             fi
           done

@@ -108,6 +108,7 @@ jobs:
       - name: Update PRs with auto-merge enabled
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BASE_BRANCH: ${{ github.ref_name }}
         run: |
           # See full script in .github/workflows/auto-update-prs.yml
 ```
@@ -118,7 +119,7 @@ See [`.github/workflows/auto-update-prs.yml`](./.github/workflows/auto-update-pr
 
 ### Specifying Base Branches
 
-Edit the `on.push.branches` section to match your workflow:
+The workflow automatically detects which branch triggered it and updates PRs targeting that branch. Simply edit the `on.push.branches` section to match your workflow - no other changes needed!
 
 **Single base branch:**
 ```yaml
@@ -147,12 +148,7 @@ on:
       - 'release/**'
 ```
 
-The workflow will check for PRs targeting whichever branch received the push. To specify a specific target branch, modify line 53 in the workflow:
-```bash
-pr_numbers=$(gh pr list --base main --state open --json number --jq '.[].number')
-```
-
-Change `--base main` to `--base develop` or the appropriate branch name.
+The workflow uses `${{ github.ref_name }}` to automatically adapt to whichever branch received the push. When you change the trigger from `main` to `develop`, all PR queries and merge operations automatically update to target `develop`. No hardcoded branch names to maintain!
 
 ## Usage
 
