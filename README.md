@@ -1,4 +1,5 @@
 # PR Auto-Update Test Repository
+# PR Auto-Update Test Repository
 
 This repository tests an automated mechanism for updating PR branches when auto-merge is enabled and the base branch moves forward.
 
