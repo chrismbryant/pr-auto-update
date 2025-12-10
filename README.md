@@ -1,5 +1,4 @@
 # PR Auto-Update Test Repository
-# PR Auto-Update Test Repository
 
 This repository tests an automated mechanism for updating PR branches when auto-merge is enabled and the base branch moves forward.
 
@@ -64,3 +63,24 @@ Run `scripts/validate_test.sh` to programmatically verify the expected behavior.
 ## Deployment to Production
 
 Once validated here, this workflow can be adapted for use in production repositories like atlas-core.
+
+### Important: PAT Requirement for Production
+
+For production use, you **must** use a Personal Access Token (PAT) instead of `GITHUB_TOKEN`. This is because GitHub does not trigger PR workflows when `github-actions[bot]` pushes to branches (security feature to prevent infinite loops).
+
+**Setup Steps:**
+
+1. **Generate a PAT**:
+   - Go to GitHub Settings → Developer Settings → Personal Access Tokens → Tokens (classic)
+   - Create a token with `repo` scope (or `public_repo` for public repos)
+   - Copy the token
+
+2. **Add token to repository secrets**:
+   - Go to repository Settings → Secrets and variables → Actions
+   - Add new secret named `AUTO_UPDATE_TOKEN`
+   - Paste your PAT
+
+3. **Update the workflow**:
+   - Change `GH_TOKEN: ${{ github.token }}` to `GH_TOKEN: ${{ secrets.AUTO_UPDATE_TOKEN }}`
+
+Without this change, the mechanism will update PR branches but won't trigger CI, preventing auto-merge from completing.
