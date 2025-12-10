@@ -1,0 +1,140 @@
+name: Auto-update PRs with Auto-merge (GitHub App version)
+
+# This is an EXAMPLE showing how to use a GitHub App token instead of GITHUB_TOKEN
+# To use this:
+# 1. Create a GitHub App following the README instructions
+# 2. Add APP_ID as a variable and APP_PRIVATE_KEY as a secret
+# 3. Rename this file to remove .example extension
+# 4. Delete or rename the original auto-update-prs.yml
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  update-prs:
+    runs-on: ubuntu-latest
+    steps:
+      # Generate a token from the GitHub App
+      - name: Generate token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Update PRs with auto-merge enabled
+        env:
+          # Use the GitHub App token instead of github.token
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          echo "=========================================="
+          echo "Auto-update PRs workflow started at $(date)"
+          echo "=========================================="
+          echo ""
+
+          # Get all open PRs targeting main
+          echo "📋 Fetching all open PRs targeting main..."
+          pr_numbers=$(gh pr list --base main --state open --json number --jq '.[].number')
+
+          if [ -z "$pr_numbers" ]; then
+            echo "ℹ️  No open PRs found. Nothing to do."
+            exit 0
+          fi
+
+          echo "Found PRs: $pr_numbers"
+          echo ""
+
+          # Process each PR
+          for pr_number in $pr_numbers; do
+            echo "=========================================="
+            echo "🔍 Evaluating PR #$pr_number at $(date)"
+            echo "=========================================="
+
+            # Get PR details
+            pr_data=$(gh pr view $pr_number --json number,title,headRefName,autoMergeRequest,mergeable)
+            pr_title=$(echo "$pr_data" | jq -r '.title')
+            pr_branch=$(echo "$pr_data" | jq -r '.headRefName')
+            auto_merge_enabled=$(echo "$pr_data" | jq -r '.autoMergeRequest != null')
+            mergeable=$(echo "$pr_data" | jq -r '.mergeable')
+
+            echo "PR #$pr_number: $pr_title"
+            echo "Branch: $pr_branch"
+            echo "Auto-merge enabled: $auto_merge_enabled"
+            echo "Mergeable state: $mergeable"
+            echo ""
+
+            # Skip if auto-merge is not enabled
+            if [ "$auto_merge_enabled" != "true" ]; then
+              echo "⏭️  Skipping PR #$pr_number - auto-merge is not enabled"
+              echo ""
+              continue
+            fi
+
+            # Skip if there are conflicts
+            if [ "$mergeable" = "CONFLICTING" ]; then
+              echo "⚠️  Skipping PR #$pr_number - has merge conflicts with main"
+              echo ""
+              continue
+            fi
+
+            # Fetch and checkout the PR branch
+            echo "📥 Fetching branch $pr_branch..."
+            git fetch origin $pr_branch
+
+            echo "🔄 Checking out branch $pr_branch..."
+            git checkout $pr_branch
+
+            # Check if branch is behind main
+            git fetch origin main
+            behind_count=$(git rev-list --count HEAD..origin/main)
+
+            if [ "$behind_count" -eq 0 ]; then
+              echo "✅ PR #$pr_number is already up-to-date with main"
+              echo ""
+              continue
+            fi
+
+            echo "📊 Branch is $behind_count commit(s) behind main"
+            echo ""
+
+            # Merge main into the PR branch
+            echo "🔀 Merging main into $pr_branch..."
+            if git merge origin/main -m "Auto-update: merge main into $pr_branch"; then
+              echo "✅ Successfully merged main into $pr_branch"
+
+              # Push the updated branch
+              echo "📤 Pushing updated branch to remote..."
+              if git push origin $pr_branch; then
+                echo "✅ Successfully pushed updated branch"
+                echo "🎉 PR #$pr_number has been updated at $(date)"
+              else
+                echo "❌ Failed to push updated branch"
+              fi
+            else
+              echo "❌ Failed to merge main into $pr_branch (conflicts detected)"
+              git merge --abort
+            fi
+
+            echo ""
+          done
+
+          echo "=========================================="
+          echo "Auto-update workflow completed at $(date)"
+          echo "=========================================="

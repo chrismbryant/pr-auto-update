@@ -72,7 +72,11 @@ When PR #1 merged, the auto-update workflow automatically ran and updated the re
 - No CI workflows triggered on these updated branches
 - Checked workflow runs: No `pull_request` events for pr3-auto, pr4-auto, pr5-auto after bot updates
 
-**Production Solution**: Use a Personal Access Token (PAT) or GitHub App token instead of `GITHUB_TOKEN`. When a workflow uses a PAT, pushes from that workflow CAN trigger other workflows.
+**Production Solution**: Use a **GitHub App** (recommended for organizations) or Personal Access Token (for personal repos). When a workflow uses a GitHub App token, pushes from that workflow CAN trigger other workflows. GitHub Apps are preferred because they:
+- Are owned by the organization, not a single user
+- Have fine-grained permissions
+- Tokens auto-expire after 1 hour (more secure)
+- Continue working even if users leave the organization
 
 ### Workaround Validation ✅
 
@@ -104,16 +108,29 @@ This demonstrates the full mechanism works when CI is properly triggered.
 6. **Logging**: Comprehensive logs show exactly what happened and why
 
 ### What Requires Action for Production 🔧
+
+**For Organization Repos (Recommended):**
+1. **Create a GitHub App**: Organization-owned, better security than PATs
+2. **App permissions needed**: `contents: write`, `pull-requests: read`
+3. **Store credentials**: App ID as variable, private key as secret
+4. **Update workflow**: Use `actions/create-github-app-token@v1` to generate token
+5. **Use the token**: Replace `github.token` with the generated app token
+
+**For Personal Repos (Alternative):**
 1. **Use PAT instead of GITHUB_TOKEN**: Required to trigger CI on bot-updated branches
 2. **PAT scopes needed**: `repo` scope (or `public_repo` for public repos)
 3. **Store PAT as secret**: Add to repository secrets as `AUTO_UPDATE_TOKEN`
 4. **Update workflow**: Change `GH_TOKEN: ${{ github.token }}` to `GH_TOKEN: ${{ secrets.AUTO_UPDATE_TOKEN }}`
 
-## Production Deployment Checklist
+## Production Deployment Checklist (GitHub App - Recommended)
 
-- [ ] Generate Personal Access Token with `repo` scope
-- [ ] Add PAT to repository secrets as `AUTO_UPDATE_TOKEN`
-- [ ] Update auto-update workflow to use PAT instead of `github.token`
+- [ ] Create GitHub App in organization settings
+- [ ] Configure app permissions: `contents: write`, `pull-requests: read`
+- [ ] Generate private key and download
+- [ ] Install app on the organization
+- [ ] Add app ID to repository variables as `APP_ID`
+- [ ] Add private key to repository secrets as `APP_PRIVATE_KEY`
+- [ ] Update auto-update workflow to use GitHub App token
 - [ ] Test with a single PR first
 - [ ] Monitor for a few days to ensure no issues
 - [ ] Roll out to all repositories
