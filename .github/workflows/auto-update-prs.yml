@@ -5,7 +5,10 @@ on:
     branches:
       - main
       # Add additional branches if needed (e.g., develop, staging)
-      # The workflow automatically adapts to whichever branch triggered it
+
+concurrency:
+  group: auto-update-prs-${{ github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -41,7 +44,10 @@ jobs:
           echo "Checking for PRs targeting ${BASE_BRANCH} with auto-merge enabled..."
 
           # Get all open PRs targeting the base branch
-          pr_numbers=$(gh pr list --base ${BASE_BRANCH} --state open --json number --jq '.[].number')
+          if ! pr_numbers=$(gh pr list --base "${BASE_BRANCH}" --state open --json number --jq '.[].number'); then
+            echo "Error: failed to list PRs targeting ${BASE_BRANCH}."
+            exit 1
+          fi
 
           if [ -z "$pr_numbers" ]; then
             echo "No open PRs found targeting ${BASE_BRANCH}."
@@ -54,11 +60,31 @@ jobs:
           for pr_number in $pr_numbers; do
             echo "Evaluating PR #$pr_number..."
 
+            # Ensure clean state at the start of each iteration
+            git checkout "${BASE_BRANCH}" 2>/dev/null || true
+            git reset --hard "origin/${BASE_BRANCH}" 2>/dev/null || true
+
             # Get PR details
-            pr_data=$(gh pr view $pr_number --json headRefName,autoMergeRequest,mergeable)
+            if ! pr_data=$(gh pr view "$pr_number" --json headRefName,autoMergeRequest,mergeable,isCrossRepository); then
+              echo "Failed to fetch details for PR #$pr_number, skipping."
+              continue
+            fi
+
+            if [ -z "$pr_data" ]; then
+              echo "No data returned for PR #$pr_number, skipping."
+              continue
+            fi
+
             pr_branch=$(echo "$pr_data" | jq -r '.headRefName')
             auto_merge_enabled=$(echo "$pr_data" | jq -r '.autoMergeRequest != null')
             mergeable=$(echo "$pr_data" | jq -r '.mergeable')
+            is_fork=$(echo "$pr_data" | jq -r '.isCrossRepository')
+
+            # Skip fork PRs (branch won't exist on origin)
+            if [ "$is_fork" = "true" ]; then
+              echo "Skipping PR #$pr_number (from fork)"
+              continue
+            fi
 
             # Skip if auto-merge is not enabled
             if [ "$auto_merge_enabled" != "true" ]; then
@@ -73,10 +99,10 @@ jobs:
             fi
 
             # Check if branch is behind the base branch
-            git fetch origin $pr_branch
-            git fetch origin ${BASE_BRANCH}
-            git checkout $pr_branch
-            behind_count=$(git rev-list --count HEAD..origin/${BASE_BRANCH})
+            git fetch origin "$pr_branch"
+            git fetch origin "${BASE_BRANCH}"
+            git checkout "$pr_branch"
+            behind_count=$(git rev-list --count "HEAD..origin/${BASE_BRANCH}")
 
             if [ "$behind_count" -eq 0 ]; then
               echo "PR #$pr_number is already up-to-date"
@@ -86,8 +112,8 @@ jobs:
             echo "PR #$pr_number is $behind_count commit(s) behind, updating..."
 
             # Merge base branch into the PR branch
-            if git merge origin/${BASE_BRANCH} -m "Auto-update: merge ${BASE_BRANCH} into $pr_branch"; then
-              if git push origin $pr_branch; then
+            if git merge "origin/${BASE_BRANCH}" -m "Auto-update: merge ${BASE_BRANCH} into $pr_branch"; then
+              if git push origin "$pr_branch"; then
                 echo "Successfully updated PR #$pr_number"
               else
                 echo "Failed to push updated branch for PR #$pr_number"
